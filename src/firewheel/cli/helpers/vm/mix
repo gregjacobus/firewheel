@@ -6,8 +6,8 @@ DESCRIPTION
 Generates a table showing the VM Images for a running experiment. The table also
 includes the power state of the VMs and the vm_resource state. Images that are the same
 and have the same power/vm_resource state are grouped. The count of the various VMs are
-provided. Additionally, the total number of scheduled VMs is shown at the bottom
-of the table.
+provided, along with the average configuration time for each group. Additionally, the total
+number of scheduled VMs is shown at the bottom of the table.
 
 Example
 +++++++
@@ -16,14 +16,14 @@ Example
 
 The output will look similar to the below table.::
 
-    +------------------------------------------------+-------------+----------------------+-------+
-    |                    VM Image                    | Power State |  VM Resource State   | Count |
-    +================================================+=============+======================+=======+
-    | ubuntu-16.04.4-server-amd64.qcow2              | RUNNING     | configured           | 4     |
-    +------------------------------------------------+-------------+----------------------+-------+
-    +------------------------------------------------+-------------+----------------------+-------+
-    |                                                |             | Total Scheduled      | 4     |
-    +------------------------------------------------+-------------+----------------------+-------+
+    +------------------------------------------------+-------------+----------------------+-------+----------+
+    |                    VM Image                    | Power State |  VM Resource State   | Count | Avg Time |
+    +================================================+=============+======================+=======+==========+
+    | ubuntu-16.04.4-server-amd64.qcow2              | RUNNING     | configured           | 4     | 0        |
+    +------------------------------------------------+-------------+----------------------+-------+----------+
+    +------------------------------------------------+-------------+----------------------+-------+----------+
+    |                                                |             | Total Scheduled      | 4     |          |
+    +------------------------------------------------+-------------+----------------------+-------+----------+
 
 DONE
 RUN LocalPython ON control
@@ -56,8 +56,10 @@ def vm_mix():
         active_exp_present = True
 
     mm_state_dict = {}
+    vm_data_dict = {}  # Track (image, time) pairs for each VM group
     if active_exp_present:
         vm_resource_vms = vm_resource_api.get_vm_states()
+        vm_resource_times = vm_resource_api.get_vm_times()
 
         for vm_name, vm_dict in mm_vms.items():
             mm_state = vm_dict["state"]
@@ -65,10 +67,16 @@ def vm_mix():
 
             if mm_state not in mm_state_dict:
                 mm_state_dict[mm_state] = {}
+                vm_data_dict[mm_state] = {}
             if vm_resource_state not in mm_state_dict[mm_state]:
                 mm_state_dict[mm_state][vm_resource_state] = []
+                vm_data_dict[mm_state][vm_resource_state] = []
 
-            mm_state_dict[mm_state][vm_resource_state].append(vm_dict["image"])
+            image = vm_dict["image"]
+            mm_state_dict[mm_state][vm_resource_state].append(image)
+            # Store both image and time to allow filtering by image later
+            vm_time = vm_resource_times.get(vm_name, "")
+            vm_data_dict[mm_state][vm_resource_state].append((image, vm_time))
 
     total_scheduled = 0
     rows = []
@@ -80,6 +88,24 @@ def vm_mix():
             for op_sys in sorted(os_set):
                 count = mm_state_dict[mm_state][vm_resource_state].count(op_sys)
                 total_scheduled += count
+
+                # Calculate average time ONLY for VMs with this specific image (op_sys)
+                group_data = vm_data_dict[mm_state][vm_resource_state]
+                valid_times = []
+                for image, time in group_data:
+                    if image == op_sys:
+                        if str(time).strip() and str(time).strip() != "":
+                            try:
+                                valid_times.append(int(time))
+                            except (ValueError, TypeError):
+                                pass
+
+                avg_time = "N/A"
+                if valid_times:
+                    avg_val = sum(valid_times) / len(valid_times)
+                    # Round to the nearest integer and convert to string
+                    avg_time = str(round(avg_val))
+
                 mm_state_str = mm_state
                 vm_resource_state_str = vm_resource_state
                 if "run" in mm_state.lower():
@@ -94,7 +120,7 @@ def vm_mix():
                     vm_resource_state_str = f"[yellow]{vm_resource_state}"
                 if "error" in vm_resource_state.lower():
                     vm_resource_state_str = f"[red]{vm_resource_state}"
-                rows.append([op_sys, mm_state_str, vm_resource_state_str, str(count)])
+                rows.append([op_sys, mm_state_str, vm_resource_state_str, str(count), avg_time])
 
     table = build_table(rows, total_scheduled)
     return table
@@ -118,11 +144,12 @@ def build_table(rows, total_scheduled):
     )
     table.add_column("VM Image")
     table.add_column("Power State")
-    table.add_column("VM Resource State", footer="[b]Total Scheduled")
-    table.add_column("Count", footer=f"[b]{total_scheduled}")
+    table.add_column("VM Resource State")
+    table.add_column("Count", footer="[b]Total Scheduled")
+    table.add_column("Avg Time", footer=f"[b]{total_scheduled}")
     # Add custom rows to the table
     if not rows:
-        rows.append(["N/A", "N/A", "N/A", "0"])
+        rows.append(["N/A", "N/A", "N/A", "0", "N/A"])
     for row in rows:
         table.add_row(*row)
     return table
