@@ -173,7 +173,7 @@ This adds two actions:
     timeout window.
 
 .. note::
-    
+
     The file transfer is scheduled at time ``220`` so it does not "race" with the Maestro flow, which starts at time ``10`` and has a timeout of ``180`` seconds.
 
 Relaunch the Experiment
